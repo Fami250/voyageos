@@ -9,7 +9,8 @@ from app import models
 # CREATE DATABASE TABLES (DEV MODE SAFE)
 # =====================================================
 
-models.Base.metadata.create_all(bind=engine)
+# models.Base.metadata.create_all(bind=engine)
+
 
 # =====================================================
 # INITIALIZE FASTAPI APP
@@ -31,15 +32,18 @@ Modules:
 )
 
 # =====================================================
-# CORS CONFIGURATION (STRICT DEV SAFE MODE)
+# CORS CONFIGURATION (PRODUCTION + DEV SAFE)
 # =====================================================
+
+origins = [
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+    "https://voyageos-frontend.onrender.com",  # Production Frontend
+]
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:5173",
-        "http://127.0.0.1:5173",
-    ],
+    allow_origins=origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -94,6 +98,6 @@ def root():
     return {
         "status": "running",
         "version": "4.1.2",
-        "environment": "development",
+        "environment": "production",
         "message": "VoyageOS ERP Engine Running 🚀"
     }

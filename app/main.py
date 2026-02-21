@@ -6,18 +6,12 @@ from app.database import engine
 from app import models
 
 # =====================================================
-# CREATE DATABASE TABLES (DEV MODE SAFE)
-# =====================================================
-
-# models.Base.metadata.create_all(bind=engine)
-
-# =====================================================
 # INITIALIZE FASTAPI APP
 # =====================================================
 
 app = FastAPI(
     title="VoyageOS API",
-    version="4.2.1",
+    version="4.2.2",
     description="""
 VoyageOS Travel ERP System
 
@@ -39,6 +33,7 @@ origins = [
     "http://localhost:5173",
     "http://127.0.0.1:5173",
     "https://voyageos-frontend.onrender.com",
+    "https://www.voyageos-frontend.onrender.com",
 ]
 
 app.add_middleware(
@@ -113,7 +108,7 @@ app.include_router(accounts_router, dependencies=[Depends(get_current_user)])
 def root():
     return {
         "status": "running",
-        "version": "4.2.1",
+        "version": "4.2.2",
         "environment": "production",
         "message": "VoyageOS ERP Engine Running 🔐"
     }

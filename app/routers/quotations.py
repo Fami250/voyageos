@@ -1,296 +1,347 @@
-from pydantic import BaseModel
-from typing import List, Optional
+from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import FileResponse
+from sqlalchemy.orm import Session
+from sqlalchemy import func
+from decimal import Decimal
+from collections import defaultdict
 from datetime import datetime, date
-from enum import Enum
+import os
+
+from reportlab.platypus import (
+    SimpleDocTemplate, Paragraph, Spacer,
+    Table, TableStyle, Image
+)
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib import colors
+from reportlab.lib.units import inch
+from reportlab.lib.pagesizes import A4
+from reportlab.lib.utils import ImageReader
+
+from app.database import get_db
+from app import models, schemas
+
+router = APIRouter(prefix="/quotations", tags=["Quotations"])
 
 
 # =====================================================
-# ENUMS
+# AUTO NUMBER
 # =====================================================
 
-class QuotationStatus(str, Enum):
-    DRAFT = "DRAFT"
-    SENT = "SENT"
-    CONFIRMED = "CONFIRMED"
-    BOOKED = "BOOKED"
-    CANCELLED = "CANCELLED"
+def generate_quotation_number(db: Session):
+    last = db.query(models.Quotation).order_by(
+        models.Quotation.id.desc()
+    ).first()
 
+    if not last:
+        return "QT-0001"
 
-class PaymentStatus(str, Enum):
-    UNPAID = "UNPAID"
-    PARTIAL = "PARTIAL"
-    PAID = "PAID"
-    OVERDUE = "OVERDUE"
-
-
-class PaymentMethod(str, Enum):
-    CASH = "CASH"
-    BANK_TRANSFER = "BANK_TRANSFER"
-    CARD = "CARD"
-    ONLINE = "ONLINE"
-    OTHER = "OTHER"
-
-
-class ServiceCategory(str, Enum):
-    HOTEL = "HOTEL"
-    TOUR = "TOUR"
-    TRANSFER = "TRANSFER"
-    VISA = "VISA"
-    TICKET = "TICKET"
-    OTHER = "OTHER"
+    try:
+        last_number = int(last.quotation_number.split("-")[1])
+        return f"QT-{last_number + 1:04d}"
+    except:
+        return f"QT-{last.id + 1:04d}"
 
 
 # =====================================================
-# COUNTRY
+# CREATE QUOTATION
 # =====================================================
 
-class CountryBase(BaseModel):
-    name: str
+@router.post("/", response_model=schemas.QuotationResponse)
+def create_quotation(data: schemas.QuotationCreate, db: Session = Depends(get_db)):
 
+    client = db.query(models.Client).filter(
+        models.Client.id == data.client_id
+    ).first()
 
-class CountryCreate(CountryBase):
-    pass
+    if not client:
+        raise HTTPException(status_code=404, detail="Client not found")
 
+    quotation = models.Quotation(
+        quotation_number=generate_quotation_number(db),
+        client_id=data.client_id,
+        margin_percentage=data.margin_percentage or 0,
+        status=models.QuotationStatus.DRAFT
+    )
 
-class CountryResponse(CountryBase):
-    id: int
+    db.add(quotation)
+    db.flush()
 
-    class Config:
-        from_attributes = True
+    total_cost = Decimal("0")
+    total_sell = Decimal("0")
 
+    for item in data.items:
 
-# =====================================================
-# CITY
-# =====================================================
+        service = db.query(models.Service).filter(
+            models.Service.id == item.service_id
+        ).first()
 
-class CityBase(BaseModel):
-    name: str
-    country_id: int
+        if not service:
+            raise HTTPException(status_code=404, detail="Service not found")
 
+        cost_price = Decimal(str(item.cost_price))
+        margin = Decimal(str(
+            item.manual_margin_percentage
+            if item.manual_margin_percentage is not None
+            else data.margin_percentage or 0
+        ))
 
-class CityCreate(CityBase):
-    pass
+        sell_price = cost_price + (cost_price * margin / Decimal("100"))
 
+        item_total_cost = cost_price * item.quantity
+        item_total_sell = sell_price * item.quantity
 
-class CityResponse(BaseModel):
-    id: int
-    name: str
-    country_id: int
-    country: CountryResponse
+        db_item = models.QuotationItem(
+            quotation_id=quotation.id,
+            service_id=service.id,
+            vendor_id=item.vendor_id,
+            quantity=item.quantity,
+            start_date=item.start_date,
+            end_date=item.end_date,
+            cost_price=float(cost_price),
+            sell_price=float(sell_price),
+            total_cost=float(item_total_cost),
+            total_sell=float(item_total_sell)
+        )
 
-    class Config:
-        from_attributes = True
+        db.add(db_item)
 
+        total_cost += item_total_cost
+        total_sell += item_total_sell
 
-# =====================================================
-# CLIENT
-# =====================================================
+    quotation.total_cost = float(total_cost)
+    quotation.total_sell = float(total_sell)
+    quotation.total_profit = float(total_sell - total_cost)
 
-class ClientBase(BaseModel):
-    company_name: str
-    contact_person: Optional[str] = None
-    email: Optional[str] = None
-    phone: Optional[str] = None
-    address: Optional[str] = None
+    db.commit()
+    db.refresh(quotation)
 
-
-class ClientCreate(ClientBase):
-    pass
-
-
-class ClientResponse(ClientBase):
-    id: int
-    created_at: datetime
-
-    class Config:
-        from_attributes = True
-
-
-# =====================================================
-# SERVICE MINI (for VendorResponse)
-# =====================================================
-
-class ServiceMini(BaseModel):
-    id: int
-    name: str
-    category: ServiceCategory
-
-    class Config:
-        from_attributes = True
+    return quotation
 
 
 # =====================================================
-# VENDOR
+# GET SINGLE
 # =====================================================
 
-class VendorBase(BaseModel):
-    name: str
-    vendor_type: Optional[str] = None
-    contact_person: Optional[str] = None
-    phone: Optional[str] = None
-    email: Optional[str] = None
-    address: Optional[str] = None
+@router.get("/{quotation_id}", response_model=schemas.QuotationResponse)
+def get_quotation(quotation_id: int, db: Session = Depends(get_db)):
 
+    quotation = db.query(models.Quotation).filter(
+        models.Quotation.id == quotation_id
+    ).first()
 
-class VendorCreate(VendorBase):
-    pass
+    if not quotation:
+        raise HTTPException(status_code=404, detail="Quotation not found")
 
-
-class VendorResponse(VendorBase):
-    id: int
-    created_at: datetime
-    services: Optional[List[ServiceMini]] = []
-
-    class Config:
-        from_attributes = True
+    return quotation
 
 
 # =====================================================
-# SERVICE
+# FIXED FILTER ROUTE (NO 500 ERROR)
 # =====================================================
 
-class ServiceBase(BaseModel):
-    name: str
-    category: ServiceCategory
-    city_id: int
+@router.get("/filter/by-date", response_model=list[schemas.QuotationResponse])
+def filter_quotations_by_date(
+    start_date: date,
+    end_date: date,
+    db: Session = Depends(get_db)
+):
 
+    quotations = db.query(models.Quotation).filter(
+        func.date(models.Quotation.created_at) >= start_date,
+        func.date(models.Quotation.created_at) <= end_date
+    ).order_by(models.Quotation.id.desc()).all()
 
-class ServiceCreate(ServiceBase):
-    vendor_ids: Optional[List[int]] = []
-
-
-class VendorMini(BaseModel):
-    id: int
-    name: str
-
-    class Config:
-        from_attributes = True
-
-
-class ServiceResponse(ServiceBase):
-    id: int
-    created_at: datetime
-    vendors: Optional[List[VendorMini]] = []
-
-    class Config:
-        from_attributes = True
+    return quotations
 
 
 # =====================================================
-# QUOTATION ITEM
+# LUXURY BROCHURE PDF ENGINE v1.0 (WRAP FIXED)
 # =====================================================
 
-class QuotationItemCreate(BaseModel):
-    service_id: int
-    vendor_id: Optional[int] = None
-    quantity: int = 1
-    start_date: date
-    end_date: date
-    cost_price: float
-    manual_margin_percentage: Optional[float] = None
+@router.get("/{quotation_id}/pdf")
+def download_customer_pdf(quotation_id: int, db: Session = Depends(get_db)):
 
+    quotation = db.query(models.Quotation).filter(
+        models.Quotation.id == quotation_id
+    ).first()
 
-class QuotationItemResponse(BaseModel):
-    id: int
-    quotation_id: int
-    service_id: int
-    service_name: Optional[str] = None
-    vendor_id: Optional[int] = None
-    quantity: int
-    start_date: date
-    end_date: date
-    cost_price: float
-    manual_margin_percentage: Optional[float] = None
-    sell_price: float
-    total_cost: float
-    total_sell: float
+    if not quotation:
+        raise HTTPException(status_code=404, detail="Quotation not found")
 
-    class Config:
-        from_attributes = True
+    if not quotation.items:
+        raise HTTPException(status_code=400, detail="No services found")
 
+    file_path = f"quotation_{quotation_id}.pdf"
 
-# =====================================================
-# QUOTATION
-# =====================================================
+    doc = SimpleDocTemplate(
+        file_path,
+        pagesize=A4,
+        rightMargin=40,
+        leftMargin=40,
+        topMargin=40,
+        bottomMargin=50
+    )
 
-class QuotationCreate(BaseModel):
-    client_id: int
-    margin_percentage: Optional[float] = 25
-    items: List[QuotationItemCreate]
+    elements = []
+    styles = getSampleStyleSheet()
 
+    # Detect Country
+    first_item = quotation.items[0]
+    service = db.query(models.Service).filter(
+        models.Service.id == first_item.service_id
+    ).first()
 
-class QuotationResponse(BaseModel):
-    id: int
-    quotation_number: str
-    client_id: int
-    total_cost: float
-    total_sell: float
-    total_profit: float
-    margin_percentage: float
-    status: QuotationStatus
-    created_at: datetime
-    items: List[QuotationItemResponse]
+    city = db.query(models.City).filter(
+        models.City.id == service.city_id
+    ).first()
 
-    class Config:
-        from_attributes = True
+    country = db.query(models.Country).filter(
+        models.Country.id == city.country_id
+    ).first()
 
+    country_name = country.name.lower()
 
-class QuotationStatusUpdate(BaseModel):
-    status: QuotationStatus
+    # Logo
+    logo_path = "app/static/uniworld_logo.png"
+    if os.path.exists(logo_path):
+        img = ImageReader(logo_path)
+        iw, ih = img.getSize()
+        desired_width = 120
+        aspect = ih / iw
+        logo = Image(
+            logo_path,
+            width=desired_width,
+            height=desired_width * aspect
+        )
+        logo.hAlign = 'LEFT'
+        elements.append(logo)
+        elements.append(Spacer(1, 15))
 
+    # Banner
+    jpg_path = f"app/static/countries/{country_name}.jpg"
+    png_path = f"app/static/countries/{country_name}.png"
+    banner_path = jpg_path if os.path.exists(jpg_path) else png_path
 
-class DeleteQuotationRequest(BaseModel):
-    reason: str
+    if os.path.exists(banner_path):
+        banner = Image(
+            banner_path,
+            width=A4[0] - 80,
+            height=3 * inch
+        )
+        banner.hAlign = 'CENTER'
+        elements.append(banner)
+        elements.append(Spacer(1, 20))
 
+    # Header
+    elements.append(Paragraph(
+        f"<b>{country.name} Holiday Package</b>",
+        styles["Heading1"]
+    ))
 
-# =====================================================
-# INVOICE
-# =====================================================
+    elements.append(Paragraph(
+        f"Quotation #: {quotation.quotation_number}",
+        styles["Normal"]
+    ))
 
-class InvoiceCreate(BaseModel):
-    quotation_id: int
+    elements.append(Paragraph(
+        f"Date: {quotation.created_at.strftime('%d %B %Y')}",
+        styles["Normal"]
+    ))
 
+    elements.append(Spacer(1, 20))
 
-class InvoiceResponse(BaseModel):
-    id: int
-    invoice_number: str
-    quotation_id: int
-    client_id: int
-    total_amount: float
-    paid_amount: float
-    due_amount: float
-    payment_status: PaymentStatus
-    created_at: datetime
+    wrap_style = ParagraphStyle(
+        "wrap_style",
+        parent=styles["Normal"],
+        wordWrap="CJK"
+    )
 
-    class Config:
-        from_attributes = True
+    data = [[
+        Paragraph("<b>Service</b>", styles["Normal"]),
+        Paragraph("<b>Qty</b>", styles["Normal"]),
+        Paragraph("<b>Amount</b>", styles["Normal"])
+    ]]
 
+    for item in quotation.items:
+        service = db.query(models.Service).filter(
+            models.Service.id == item.service_id
+        ).first()
 
-# =====================================================
-# PAYMENT UPDATE (🔥 FIXED)
-# =====================================================
+        service_name = service.name if service else "Service"
 
-class PaymentUpdate(BaseModel):
-    paid_amount: float
-    payment_date: Optional[date] = None   # 🔥 ADDED (FIX)
-    payment_method: Optional[PaymentMethod] = None
-    reference_number: Optional[str] = None
-    notes: Optional[str] = None
+        data.append([
+            Paragraph(service_name, wrap_style),
+            Paragraph(str(item.quantity), styles["Normal"]),
+            Paragraph(f"{item.total_sell:,.0f}", styles["Normal"])
+        ])
 
+    data.append([
+        Paragraph("<b>Total Package Cost</b>", styles["Normal"]),
+        "",
+        Paragraph(f"<b>{quotation.total_sell:,.0f}</b>", styles["Normal"])
+    ])
 
-# =====================================================
-# INVOICE PAYMENT RESPONSE
-# =====================================================
+    table = Table(
+        data,
+        colWidths=[4.0 * inch, 0.8 * inch, 1.4 * inch],
+        repeatRows=1
+    )
 
-class InvoicePaymentResponse(BaseModel):
-    id: int
-    invoice_id: int
-    payment_date: date
-    amount: float
-    payment_method: Optional[PaymentMethod] = None
-    reference_no: Optional[str] = None
-    notes: Optional[str] = None
-    created_at: datetime
+    table.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#163E82")),
+        ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+        ("GRID", (0, 0), (-1, -1), 0.3, colors.grey),
+        ("ALIGN", (1, 1), (1, -1), "CENTER"),
+        ("ALIGN", (2, 1), (2, -1), "RIGHT"),
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+    ]))
 
-    class Config:
-        from_attributes = True
+    elements.append(table)
+    elements.append(Spacer(1, 25))
+
+    # Day Wise
+    elements.append(Paragraph("Day Wise Itinerary", styles["Heading2"]))
+    elements.append(Spacer(1, 10))
+
+    grouped = defaultdict(list)
+
+    for item in quotation.items:
+        grouped[item.start_date].append(item)
+
+    sorted_dates = sorted(grouped.keys())
+    day_counter = 1
+
+    for travel_date in sorted_dates:
+        elements.append(
+            Paragraph(
+                f"<b>Day {day_counter} – {travel_date.strftime('%d %b %Y')}</b>",
+                styles["Normal"]
+            )
+        )
+
+        for item in grouped[travel_date]:
+            service = db.query(models.Service).filter(
+                models.Service.id == item.service_id
+            ).first()
+
+            city = db.query(models.City).filter(
+                models.City.id == service.city_id
+            ).first()
+
+            elements.append(
+                Paragraph(f"• {city.name} – {service.name}", styles["Normal"])
+            )
+
+        elements.append(Spacer(1, 8))
+        day_counter += 1
+
+    doc.build(elements)
+
+    return FileResponse(
+        file_path,
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition":
+                f'inline; filename="{quotation.quotation_number}.pdf"'
+        }
+    )

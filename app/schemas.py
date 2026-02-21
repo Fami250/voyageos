@@ -205,7 +205,7 @@ class QuotationItemResponse(BaseModel):
     total_cost: float
     total_sell: float
 
-    # 🔥 ADDED FOR NESTED SERVICE (NO DELETE)
+    # 🔥 ADDED (for frontend service.name)
     service: Optional[ServiceResponse] = None
 
     class Config:
@@ -234,7 +234,7 @@ class QuotationResponse(BaseModel):
     created_at: datetime
     items: List[QuotationItemResponse]
 
-    # 🔥 ADDED FOR CLIENT NAME ACCESS
+    # 🔥 ADDED (for frontend client.company_name)
     client: Optional[ClientResponse] = None
 
     class Config:

@@ -205,6 +205,9 @@ class QuotationItemResponse(BaseModel):
     total_cost: float
     total_sell: float
 
+    # 🔥 ADDED FOR NESTED SERVICE (NO DELETE)
+    service: Optional[ServiceResponse] = None
+
     class Config:
         from_attributes = True
 
@@ -230,6 +233,9 @@ class QuotationResponse(BaseModel):
     status: QuotationStatus
     created_at: datetime
     items: List[QuotationItemResponse]
+
+    # 🔥 ADDED FOR CLIENT NAME ACCESS
+    client: Optional[ClientResponse] = None
 
     class Config:
         from_attributes = True
@@ -267,12 +273,12 @@ class InvoiceResponse(BaseModel):
 
 
 # =====================================================
-# PAYMENT UPDATE (🔥 FIXED)
+# PAYMENT UPDATE
 # =====================================================
 
 class PaymentUpdate(BaseModel):
     paid_amount: float
-    payment_date: Optional[date] = None   # 🔥 ADDED (FIX)
+    payment_date: Optional[date] = None
     payment_method: Optional[PaymentMethod] = None
     reference_number: Optional[str] = None
     notes: Optional[str] = None

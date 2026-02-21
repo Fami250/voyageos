@@ -134,7 +134,7 @@ def get_quotation(quotation_id: int, db: Session = Depends(get_db)):
 
 
 # =====================================================
-# 🔥 LUXURY BROCHURE PDF ENGINE v1.0
+# 🔥 LUXURY BROCHURE PDF ENGINE v1.0 (WRAP FIXED)
 # =====================================================
 
 @router.get("/{quotation_id}/pdf")
@@ -164,10 +164,7 @@ def download_customer_pdf(quotation_id: int, db: Session = Depends(get_db)):
     elements = []
     styles = getSampleStyleSheet()
 
-    # =====================================================
-    # DETECT COUNTRY
-    # =====================================================
-
+    # ===== Detect Country =====
     first_item = quotation.items[0]
     service = db.query(models.Service).filter(
         models.Service.id == first_item.service_id
@@ -183,10 +180,7 @@ def download_customer_pdf(quotation_id: int, db: Session = Depends(get_db)):
 
     country_name = country.name.lower()
 
-    # =====================================================
-    # LOGO
-    # =====================================================
-
+    # ===== Logo =====
     logo_path = "app/static/uniworld_logo.png"
 
     if os.path.exists(logo_path):
@@ -203,13 +197,9 @@ def download_customer_pdf(quotation_id: int, db: Session = Depends(get_db)):
         elements.append(logo)
         elements.append(Spacer(1, 15))
 
-    # =====================================================
-    # COUNTRY BANNER
-    # =====================================================
-
+    # ===== Banner =====
     jpg_path = f"app/static/countries/{country_name}.jpg"
     png_path = f"app/static/countries/{country_name}.png"
-
     banner_path = jpg_path if os.path.exists(jpg_path) else png_path
 
     if os.path.exists(banner_path):
@@ -222,10 +212,7 @@ def download_customer_pdf(quotation_id: int, db: Session = Depends(get_db)):
         elements.append(banner)
         elements.append(Spacer(1, 20))
 
-    # =====================================================
-    # HEADER
-    # =====================================================
-
+    # ===== Header =====
     elements.append(Paragraph(
         f"<b>{country.name} Holiday Package</b>",
         styles["Heading1"]
@@ -243,48 +230,57 @@ def download_customer_pdf(quotation_id: int, db: Session = Depends(get_db)):
 
     elements.append(Spacer(1, 20))
 
-    # =====================================================
-    # COST TABLE
-    # =====================================================
+    # ===== WRAP STYLE =====
+    wrap_style = ParagraphStyle(
+        "wrap_style",
+        parent=styles["Normal"],
+        wordWrap="CJK"
+    )
 
-    data = [["Service", "Qty", "Amount"]]
+    data = [[
+        Paragraph("<b>Service</b>", styles["Normal"]),
+        Paragraph("<b>Qty</b>", styles["Normal"]),
+        Paragraph("<b>Amount</b>", styles["Normal"])
+    ]]
 
     for item in quotation.items:
         service = db.query(models.Service).filter(
             models.Service.id == item.service_id
         ).first()
 
+        service_name = service.name if service else "Service"
+
         data.append([
-            service.name,
-            str(item.quantity),
-            f"{item.total_sell:,.0f}"
+            Paragraph(service_name, wrap_style),
+            Paragraph(str(item.quantity), styles["Normal"]),
+            Paragraph(f"{item.total_sell:,.0f}", styles["Normal"])
         ])
 
-    data.append(["Total Package Cost", "", f"{quotation.total_sell:,.0f}"])
+    data.append([
+        Paragraph("<b>Total Package Cost</b>", styles["Normal"]),
+        "",
+        Paragraph(f"<b>{quotation.total_sell:,.0f}</b>", styles["Normal"])
+    ])
 
     table = Table(
         data,
-        colWidths=[4.2 * inch, 0.8 * inch, 1.5 * inch],
-        hAlign="LEFT"
+        colWidths=[4.0 * inch, 0.8 * inch, 1.4 * inch],
+        repeatRows=1
     )
 
     table.setStyle(TableStyle([
         ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#163E82")),
         ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
-        ("BACKGROUND", (0, -1), (-1, -1), colors.whitesmoke),
-        ("LINEABOVE", (0, -1), (-1, -1), 1, colors.black),
+        ("GRID", (0, 0), (-1, -1), 0.3, colors.grey),
         ("ALIGN", (1, 1), (1, -1), "CENTER"),
         ("ALIGN", (2, 1), (2, -1), "RIGHT"),
-        ("GRID", (0, 0), (-1, -1), 0.3, colors.grey),
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
     ]))
 
     elements.append(table)
     elements.append(Spacer(1, 25))
 
-    # =====================================================
-    # DAY WISE ITINERARY
-    # =====================================================
-
+    # ===== Day Wise =====
     elements.append(Paragraph("Day Wise Itinerary", styles["Heading2"]))
     elements.append(Spacer(1, 10))
 

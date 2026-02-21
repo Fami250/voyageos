@@ -2,10 +2,17 @@ from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 from datetime import datetime
+
 from app.database import get_db
 from app import models
+from app.dependencies import verify_token   # 🔐 NEW
 
-router = APIRouter(prefix="/accounts", tags=["Accounts"])
+
+router = APIRouter(
+    prefix="/accounts",
+    tags=["Accounts"],
+    dependencies=[Depends(verify_token)]   # 🔒 GLOBAL PROTECTION
+)
 
 
 @router.get("/summary")

@@ -9,10 +9,13 @@ from app.database import get_db
 from app import models, schemas
 from app.utils.pdf_generator import generate_invoice_pdf
 from app.utils.payment_voucher_generator import generate_payment_voucher_pdf
+from app.dependencies import verify_token   # 🔐 NEW
+
 
 router = APIRouter(
     prefix="/invoices",
-    tags=["Invoices"]
+    tags=["Invoices"],
+    dependencies=[Depends(verify_token)]   # 🔒 GLOBAL PROTECTION
 )
 
 # =====================================================
@@ -108,7 +111,6 @@ def get_invoices(
 
     invoices = query.order_by(models.Invoice.id.desc()).all()
 
-    # 🔥 CRITICAL FIX: Always recalc totals
     for inv in invoices:
 
         total_paid = db.query(
@@ -173,7 +175,7 @@ def get_invoice_payments(invoice_id: int, db: Session = Depends(get_db)):
 
 
 # =====================================================
-# PAYMENT ENGINE (MULTI PART SAFE)
+# PAYMENT ENGINE
 # =====================================================
 
 @router.put("/{invoice_id}/payment", response_model=schemas.InvoiceResponse)
@@ -207,7 +209,6 @@ def update_payment(invoice_id: int, data: schemas.PaymentUpdate, db: Session = D
     db.add(payment)
     db.commit()
 
-    # 🔥 Recalculate
     total_paid = db.query(
         func.coalesce(func.sum(models.InvoicePayment.amount), 0)
     ).filter(

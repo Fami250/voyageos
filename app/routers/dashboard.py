@@ -1,10 +1,17 @@
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 from sqlalchemy import func
+
 from app.database import get_db
 from app import models
+from app.dependencies import verify_token   # 🔐 NEW
 
-router = APIRouter(prefix="/dashboard", tags=["Dashboard"])
+
+router = APIRouter(
+    prefix="/dashboard",
+    tags=["Dashboard"],
+    dependencies=[Depends(verify_token)]   # 🔒 GLOBAL PROTECTION
+)
 
 
 @router.get("/")
@@ -25,7 +32,6 @@ def get_dashboard_summary(db: Session = Depends(get_db)):
         func.sum(models.Quotation.total_profit)
     ).scalar() or 0
 
-    # Conversion Rate %
     conversion_rate = 0
     if total_quotations > 0:
         conversion_rate = (confirmed_quotations / total_quotations) * 100

@@ -6,10 +6,13 @@ from typing import List
 
 from app.database import get_db
 from app import models
+from app.dependencies import verify_token   # 🔐 NEW
+
 
 router = APIRouter(
     prefix="/payments",
-    tags=["Payments"]
+    tags=["Payments"],
+    dependencies=[Depends(verify_token)]   # 🔒 GLOBAL PROTECTION
 )
 
 # =====================================================
@@ -33,7 +36,6 @@ def add_payment(
     if not quotation:
         raise HTTPException(status_code=404, detail="Quotation not found")
 
-    # Create payment record
     payment = models.Payment(
         quotation_id=quotation.id,
         client_id=quotation.client_id,
@@ -63,7 +65,6 @@ def add_payment(
         invoice.paid_amount = total_paid
         invoice.due_amount = invoice.total_amount - total_paid
 
-        # Update payment status
         if invoice.due_amount <= 0:
             invoice.payment_status = models.PaymentStatus.PAID
         elif total_paid > 0:
@@ -71,7 +72,6 @@ def add_payment(
         else:
             invoice.payment_status = models.PaymentStatus.UNPAID
 
-        # Overdue check
         if quotation.due_date and invoice.due_amount > 0:
             if quotation.due_date < date.today():
                 invoice.payment_status = models.PaymentStatus.OVERDUE
@@ -102,7 +102,7 @@ def get_payments_by_quotation(
 
 
 # =====================================================
-# PAYMENT SUMMARY (FOR DASHBOARD)
+# PAYMENT SUMMARY
 # =====================================================
 
 @router.get("/summary")
@@ -127,4 +127,3 @@ def payment_summary(db: Session = Depends(get_db)):
         "total_due": total_due,
         "overdue_amount": overdue_amount
     }
-

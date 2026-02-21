@@ -4,11 +4,13 @@ from typing import List
 
 from app.database import get_db
 from app import models, schemas
+from app.dependencies import verify_token  # 🔐 NEW
 
 
 router = APIRouter(
     prefix="/cities",
-    tags=["Cities"]
+    tags=["Cities"],
+    dependencies=[Depends(verify_token)]  # 🔒 GLOBAL PROTECTION
 )
 
 

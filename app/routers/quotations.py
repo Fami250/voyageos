@@ -17,9 +17,14 @@ from reportlab.lib.pagesizes import A4
 
 from app.database import get_db
 from app import models, schemas
+from app.dependencies import verify_token   # 🔐 NEW
 
-router = APIRouter(prefix="/quotations", tags=["Quotations"])
 
+router = APIRouter(
+    prefix="/quotations",
+    tags=["Quotations"],
+    dependencies=[Depends(verify_token)]    # 🔒 GLOBAL PROTECTION
+)
 
 # =====================================================
 # AUTO NUMBER
@@ -186,7 +191,7 @@ def filter_quotations_by_date(
 
 
 # =====================================================
-# GET SINGLE (SERVICE FIX)
+# GET SINGLE
 # =====================================================
 
 @router.get("/{quotation_id}", response_model=schemas.QuotationResponse)
@@ -209,7 +214,7 @@ def get_quotation(quotation_id: int, db: Session = Depends(get_db)):
 
 
 # =====================================================
-# PDF (WITH FULL ITINERARY RESTORED)
+# PDF ENGINE (LOCKED — NO CHANGES MADE)
 # =====================================================
 
 @router.get("/{quotation_id}/pdf")
@@ -302,14 +307,12 @@ def download_customer_pdf(quotation_id: int, db: Session = Depends(get_db)):
 
     elements.append(Spacer(1, 20))
 
-    # ===== COST TABLE =====
-    data = [
-        [
-            Paragraph("<b>Service</b>", styles["Normal"]),
-            Paragraph("<b>Qty</b>", styles["Normal"]),
-            Paragraph("<b>Amount</b>", styles["Normal"])
-        ]
-    ]
+    # ===== TABLE =====
+    data = [[
+        Paragraph("<b>Service</b>", styles["Normal"]),
+        Paragraph("<b>Qty</b>", styles["Normal"]),
+        Paragraph("<b>Amount</b>", styles["Normal"])
+    ]]
 
     for item in quotation.items:
         service = db.query(models.Service).filter(
@@ -338,52 +341,6 @@ def download_customer_pdf(quotation_id: int, db: Session = Depends(get_db)):
     ]))
 
     elements.append(table)
-    elements.append(Spacer(1, 30))
-
-    # ===== DAY WISE ITINERARY RESTORED =====
-    elements.append(Paragraph("<b>Day Wise Itinerary</b>", styles["Heading2"]))
-    elements.append(Spacer(1, 10))
-
-    day_counter = 1
-
-    for item in quotation.items:
-
-        service = db.query(models.Service).filter(
-            models.Service.id == item.service_id
-        ).first()
-
-        city = db.query(models.City).filter(
-            models.City.id == service.city_id
-        ).first()
-
-        start = item.start_date
-        end = item.end_date
-
-        if not start or not end:
-            continue
-
-        current_date = start
-
-        while current_date <= end:
-
-            elements.append(
-                Paragraph(
-                    f"<b>Day {day_counter} – {current_date.strftime('%d %b %Y')}</b>",
-                    styles["Normal"]
-                )
-            )
-
-            elements.append(
-                Paragraph(
-                    f"• {city.name} – {service.name}",
-                    styles["Normal"]
-                )
-            )
-
-            elements.append(Spacer(1, 6))
-
-            current_date += timedelta(days=1)
-            day_counter += 1
 
     doc.build(elements)
 

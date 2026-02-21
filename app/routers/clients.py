@@ -4,11 +4,13 @@ from typing import List
 
 from app.database import get_db
 from app import models, schemas
+from app.dependencies import verify_token  # 🔐 NEW
 
 
 router = APIRouter(
     prefix="/clients",
-    tags=["Clients"]
+    tags=["Clients"],
+    dependencies=[Depends(verify_token)]  # 🔒 GLOBAL PROTECTION
 )
 
 
@@ -17,7 +19,7 @@ router = APIRouter(
 # ===============================
 @router.post("/", response_model=schemas.ClientResponse)
 def create_client(client: schemas.ClientCreate, db: Session = Depends(get_db)):
-    
+
     # Check if email already exists
     existing_client = db.query(models.Client).filter(
         models.Client.email == client.email

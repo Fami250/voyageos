@@ -5,10 +5,13 @@ import pandas as pd
 
 from app.database import get_db
 from app import models, schemas
+from app.dependencies import verify_token  # 🔐 NEW
+
 
 router = APIRouter(
     prefix="/services",
-    tags=["Services"]
+    tags=["Services"],
+    dependencies=[Depends(verify_token)]  # 🔒 GLOBAL PROTECTION
 )
 
 # =====================================================
@@ -86,7 +89,6 @@ def create_service(
         models.Service.id == new_service.id
     ).first()
 
-    # 🔥 IMPORTANT FIX: MANUAL RESPONSE FORMAT
     return {
         "id": service.id,
         "name": service.name,
@@ -180,6 +182,8 @@ def delete_service(service_id: int, db: Session = Depends(get_db)):
     db.commit()
 
     return {"message": "Service deleted successfully"}
+
+
 # =====================================================
 # FILTER SERVICES BY CITY + CATEGORY
 # =====================================================
@@ -196,4 +200,3 @@ def filter_services(
     ).order_by(models.Service.name.asc()).all()
 
     return services
-

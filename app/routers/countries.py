@@ -5,7 +5,7 @@ from typing import List
 from app.database import get_db
 from app import models
 from pydantic import BaseModel
-from app.dependencies import verify_token  # 🔐 NEW
+from app.dependencies import get_current_user  # 🔐 NEW
 
 
 # =============================
@@ -31,7 +31,7 @@ class CountryResponse(BaseModel):
 router = APIRouter(
     prefix="/countries",
     tags=["Countries"],
-    dependencies=[Depends(verify_token)]  # 🔒 GLOBAL PROTECTION
+    dependencies=[Depends(get_current_user)]  # 🔒 GLOBAL PROTECTION
 )
 
 # =============================

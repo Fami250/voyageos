@@ -4,13 +4,13 @@ from sqlalchemy import func
 
 from app.database import get_db
 from app import models
-from app.dependencies import verify_token   # 🔐 NEW
+from app.dependencies import get_current_user   # 🔐 NEW
 
 
 router = APIRouter(
     prefix="/dashboard",
     tags=["Dashboard"],
-    dependencies=[Depends(verify_token)]   # 🔒 GLOBAL PROTECTION
+    dependencies=[Depends(get_current_user)]   # 🔒 GLOBAL PROTECTION
 )
 
 

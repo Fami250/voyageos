@@ -5,13 +5,13 @@ import pandas as pd
 
 from app.database import get_db
 from app import models, schemas
-from app.dependencies import verify_token  # 🔐 NEW
+from app.dependencies import get_current_user  # 🔐 NEW
 
 
 router = APIRouter(
     prefix="/services",
     tags=["Services"],
-    dependencies=[Depends(verify_token)]  # 🔒 GLOBAL PROTECTION
+    dependencies=[Depends(get_current_user)]  # 🔒 GLOBAL PROTECTION
 )
 
 # =====================================================

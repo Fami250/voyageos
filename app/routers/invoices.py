@@ -9,13 +9,13 @@ from app.database import get_db
 from app import models, schemas
 from app.utils.pdf_generator import generate_invoice_pdf
 from app.utils.payment_voucher_generator import generate_payment_voucher_pdf
-from app.dependencies import verify_token   # 🔐 NEW
+from app.dependencies import get_current_user   # 🔐 NEW
 
 
 router = APIRouter(
     prefix="/invoices",
     tags=["Invoices"],
-    dependencies=[Depends(verify_token)]   # 🔒 GLOBAL PROTECTION
+    dependencies=[Depends(get_current_user)]   # 🔒 GLOBAL PROTECTION
 )
 
 # =====================================================

@@ -9,13 +9,13 @@ from app.database import get_db
 from app import models, schemas
 from app.utils.pdf_generator import generate_invoice_pdf
 from app.utils.payment_voucher_generator import generate_payment_voucher_pdf
-from app.dependencies import get_current_user   # 🔐 NEW
+from app.dependencies import get_current_user
 
 
+# ❌ GLOBAL JWT REMOVED
 router = APIRouter(
     prefix="/invoices",
-    tags=["Invoices"],
-    dependencies=[Depends(get_current_user)]   # 🔒 GLOBAL PROTECTION
+    tags=["Invoices"]
 )
 
 # =====================================================
@@ -53,10 +53,11 @@ def generate_receipt_number(db: Session):
 
 
 # =====================================================
-# CREATE INVOICE
+# CREATE INVOICE (🔒 PROTECTED)
 # =====================================================
 
-@router.post("/", response_model=schemas.InvoiceResponse)
+@router.post("/", response_model=schemas.InvoiceResponse,
+             dependencies=[Depends(get_current_user)])
 def create_invoice(data: schemas.InvoiceCreate, db: Session = Depends(get_db)):
 
     quotation = db.query(models.Quotation).filter(
@@ -95,10 +96,11 @@ def create_invoice(data: schemas.InvoiceCreate, db: Session = Depends(get_db)):
 
 
 # =====================================================
-# GET ALL INVOICES (AUTO RECALCULATE FIXED)
+# GET ALL INVOICES (🔒 PROTECTED)
 # =====================================================
 
-@router.get("/", response_model=List[schemas.InvoiceResponse])
+@router.get("/", response_model=List[schemas.InvoiceResponse],
+            dependencies=[Depends(get_current_user)])
 def get_invoices(
     quotation_id: Optional[int] = None,
     db: Session = Depends(get_db)
@@ -131,15 +133,16 @@ def get_invoices(
             inv.payment_status = models.PaymentStatus.UNPAID
 
     db.commit()
-
     return invoices
 
 
 # =====================================================
-# CANCEL INVOICE
+# CANCEL INVOICE (🔒 PROTECTED)
 # =====================================================
 
-@router.put("/{invoice_id}/cancel", response_model=schemas.InvoiceResponse)
+@router.put("/{invoice_id}/cancel",
+            response_model=schemas.InvoiceResponse,
+            dependencies=[Depends(get_current_user)])
 def cancel_invoice(invoice_id: int, db: Session = Depends(get_db)):
 
     invoice = db.query(models.Invoice).filter(
@@ -162,10 +165,12 @@ def cancel_invoice(invoice_id: int, db: Session = Depends(get_db)):
 
 
 # =====================================================
-# GET PAYMENT HISTORY
+# GET PAYMENT HISTORY (🔒 PROTECTED)
 # =====================================================
 
-@router.get("/{invoice_id}/payments", response_model=List[schemas.InvoicePaymentResponse])
+@router.get("/{invoice_id}/payments",
+            response_model=List[schemas.InvoicePaymentResponse],
+            dependencies=[Depends(get_current_user)])
 def get_invoice_payments(invoice_id: int, db: Session = Depends(get_db)):
 
     return db.query(models.InvoicePayment)\
@@ -175,10 +180,12 @@ def get_invoice_payments(invoice_id: int, db: Session = Depends(get_db)):
 
 
 # =====================================================
-# PAYMENT ENGINE
+# PAYMENT ENGINE (🔒 PROTECTED)
 # =====================================================
 
-@router.put("/{invoice_id}/payment", response_model=schemas.InvoiceResponse)
+@router.put("/{invoice_id}/payment",
+            response_model=schemas.InvoiceResponse,
+            dependencies=[Depends(get_current_user)])
 def update_payment(invoice_id: int, data: schemas.PaymentUpdate, db: Session = Depends(get_db)):
 
     invoice = db.query(models.Invoice).filter(
@@ -219,7 +226,6 @@ def update_payment(invoice_id: int, data: schemas.PaymentUpdate, db: Session = D
     invoice.due_amount = float(invoice.total_amount - invoice.paid_amount)
 
     if invoice.due_amount <= 0:
-        invoice.due_amount = 0.0
         invoice.payment_status = models.PaymentStatus.PAID
     elif invoice.paid_amount > 0:
         invoice.payment_status = models.PaymentStatus.PARTIAL
@@ -233,7 +239,7 @@ def update_payment(invoice_id: int, data: schemas.PaymentUpdate, db: Session = D
 
 
 # =====================================================
-# INVOICE PDF
+# INVOICE PDF (🌍 PUBLIC)
 # =====================================================
 
 @router.get("/{invoice_id}/pdf")
@@ -259,7 +265,7 @@ def download_invoice_pdf(invoice_id: int, db: Session = Depends(get_db)):
 
 
 # =====================================================
-# PAYMENT VOUCHER PDF
+# PAYMENT VOUCHER PDF (🌍 PUBLIC)
 # =====================================================
 
 @router.get("/payments/{payment_id}/voucher")

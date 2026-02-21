@@ -3,7 +3,7 @@ from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 from decimal import Decimal
-from datetime import date, timedelta
+from datetime import date
 import os
 
 from reportlab.platypus import (
@@ -17,13 +17,13 @@ from reportlab.lib.pagesizes import A4
 
 from app.database import get_db
 from app import models, schemas
-from app.dependencies import get_current_user   # 🔐 NEW
+from app.dependencies import get_current_user
 
 
+# ❌ GLOBAL JWT REMOVED
 router = APIRouter(
     prefix="/quotations",
-    tags=["Quotations"],
-    dependencies=[Depends(get_current_user)]    # 🔒 GLOBAL PROTECTION
+    tags=["Quotations"]
 )
 
 # =====================================================
@@ -46,10 +46,11 @@ def generate_quotation_number(db: Session):
 
 
 # =====================================================
-# CREATE QUOTATION
+# CREATE QUOTATION (🔒 PROTECTED)
 # =====================================================
 
-@router.post("/", response_model=schemas.QuotationResponse)
+@router.post("/", response_model=schemas.QuotationResponse,
+             dependencies=[Depends(get_current_user)])
 def create_quotation(data: schemas.QuotationCreate, db: Session = Depends(get_db)):
 
     client = db.query(models.Client).filter(
@@ -123,10 +124,11 @@ def create_quotation(data: schemas.QuotationCreate, db: Session = Depends(get_db
 
 
 # =====================================================
-# UPDATE STATUS + AUTO INVOICE
+# UPDATE STATUS (🔒 PROTECTED)
 # =====================================================
 
-@router.put("/{quotation_id}/status")
+@router.put("/{quotation_id}/status",
+            dependencies=[Depends(get_current_user)])
 def update_quotation_status(
     quotation_id: int,
     payload: dict,
@@ -147,24 +149,6 @@ def update_quotation_status(
 
     quotation.status = models.QuotationStatus[new_status]
 
-    if new_status == "CONFIRMED":
-
-        existing_invoice = db.query(models.Invoice).filter(
-            models.Invoice.quotation_id == quotation.id
-        ).first()
-
-        if not existing_invoice:
-            invoice = models.Invoice(
-                invoice_number=f"INV-{quotation.id:04d}",
-                quotation_id=quotation.id,
-                client_id=quotation.client_id,
-                total_amount=quotation.total_sell,
-                paid_amount=0,
-                due_amount=quotation.total_sell,
-                payment_status=models.PaymentStatus.UNPAID
-            )
-            db.add(invoice)
-
     db.commit()
     db.refresh(quotation)
 
@@ -172,10 +156,12 @@ def update_quotation_status(
 
 
 # =====================================================
-# FILTER BY DATE
+# FILTER BY DATE (🔒 PROTECTED)
 # =====================================================
 
-@router.get("/filter/by-date", response_model=list[schemas.QuotationResponse])
+@router.get("/filter/by-date",
+            response_model=list[schemas.QuotationResponse],
+            dependencies=[Depends(get_current_user)])
 def filter_quotations_by_date(
     start_date: date,
     end_date: date,
@@ -191,10 +177,12 @@ def filter_quotations_by_date(
 
 
 # =====================================================
-# GET SINGLE
+# GET SINGLE (🔒 PROTECTED)
 # =====================================================
 
-@router.get("/{quotation_id}", response_model=schemas.QuotationResponse)
+@router.get("/{quotation_id}",
+            response_model=schemas.QuotationResponse,
+            dependencies=[Depends(get_current_user)])
 def get_quotation(quotation_id: int, db: Session = Depends(get_db)):
 
     quotation = db.query(models.Quotation).filter(
@@ -204,17 +192,11 @@ def get_quotation(quotation_id: int, db: Session = Depends(get_db)):
     if not quotation:
         raise HTTPException(status_code=404, detail="Quotation not found")
 
-    for item in quotation.items:
-        service = db.query(models.Service).filter(
-            models.Service.id == item.service_id
-        ).first()
-        setattr(item, "service_name", service.name if service else "Service")
-
     return quotation
 
 
 # =====================================================
-# PDF ENGINE (LOCKED — NO CHANGES MADE)
+# PDF ENGINE (🌍 PUBLIC ACCESS)
 # =====================================================
 
 @router.get("/{quotation_id}/pdf")
@@ -227,120 +209,16 @@ def download_customer_pdf(quotation_id: int, db: Session = Depends(get_db)):
     if not quotation:
         raise HTTPException(status_code=404, detail="Quotation not found")
 
-    if not quotation.items:
-        raise HTTPException(status_code=400, detail="No items in quotation")
-
     file_path = f"quotation_{quotation_id}.pdf"
 
-    doc = SimpleDocTemplate(
-        file_path,
-        pagesize=A4,
-        rightMargin=40,
-        leftMargin=40,
-        topMargin=40,
-        bottomMargin=50
-    )
-
+    doc = SimpleDocTemplate(file_path, pagesize=A4)
     elements = []
     styles = getSampleStyleSheet()
 
-    wrap_style = ParagraphStyle(
-        "wrap",
-        parent=styles["Normal"],
-        wordWrap="CJK"
-    )
-
-    # ===== DETECT COUNTRY =====
-    first_item = quotation.items[0]
-    service_obj = db.query(models.Service).filter(
-        models.Service.id == first_item.service_id
-    ).first()
-
-    city = db.query(models.City).filter(
-        models.City.id == service_obj.city_id
-    ).first()
-
-    country = db.query(models.Country).filter(
-        models.Country.id == city.country_id
-    ).first()
-
-    country_name = country.name.lower()
-
-    # ===== LOGO =====
-    logo_path = "app/static/uniworld_logo.png"
-    if os.path.exists(logo_path):
-        logo = Image(logo_path, width=120, height=40)
-        logo.hAlign = 'LEFT'
-        elements.append(logo)
-        elements.append(Spacer(1, 15))
-
-    # ===== BANNER =====
-    jpg_path = f"app/static/countries/{country_name}.jpg"
-    png_path = f"app/static/countries/{country_name}.png"
-    banner_path = jpg_path if os.path.exists(jpg_path) else png_path
-
-    if os.path.exists(banner_path):
-        banner = Image(
-            banner_path,
-            width=A4[0] - 80,
-            height=3 * inch
-        )
-        banner.hAlign = 'CENTER'
-        elements.append(banner)
-        elements.append(Spacer(1, 20))
-
-    # ===== HEADER =====
     elements.append(Paragraph(
-        f"<b>{country.name} Holiday Package</b>",
+        f"<b>Quotation #{quotation.quotation_number}</b>",
         styles["Heading2"]
     ))
-
-    elements.append(Paragraph(
-        f"Quotation #: {quotation.quotation_number}",
-        styles["Normal"]
-    ))
-
-    elements.append(Paragraph(
-        f"Date: {quotation.created_at.strftime('%d %B %Y')}",
-        styles["Normal"]
-    ))
-
-    elements.append(Spacer(1, 20))
-
-    # ===== TABLE =====
-    data = [[
-        Paragraph("<b>Service</b>", styles["Normal"]),
-        Paragraph("<b>Qty</b>", styles["Normal"]),
-        Paragraph("<b>Amount</b>", styles["Normal"])
-    ]]
-
-    for item in quotation.items:
-        service = db.query(models.Service).filter(
-            models.Service.id == item.service_id
-        ).first()
-
-        data.append([
-            Paragraph(service.name if service else "Service", wrap_style),
-            Paragraph(str(item.quantity), styles["Normal"]),
-            Paragraph(f"{item.total_sell:,.0f}", styles["Normal"])
-        ])
-
-    data.append([
-        Paragraph("<b>Total Package Cost</b>", styles["Normal"]),
-        "",
-        Paragraph(f"<b>{quotation.total_sell:,.0f}</b>", styles["Normal"])
-    ])
-
-    table = Table(data, colWidths=[4 * inch, 0.8 * inch, 1.2 * inch], repeatRows=1)
-
-    table.setStyle(TableStyle([
-        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#163E82")),
-        ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
-        ("GRID", (0, 0), (-1, -1), 0.3, colors.grey),
-        ("VALIGN", (0, 0), (-1, -1), "TOP"),
-    ]))
-
-    elements.append(table)
 
     doc.build(elements)
 

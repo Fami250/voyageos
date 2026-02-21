@@ -132,6 +132,19 @@ def get_quotation(quotation_id: int, db: Session = Depends(get_db)):
 
     return quotation
 
+@router.get("/filter/by-date", response_model=list[schemas.QuotationResponse])
+def filter_quotations_by_date(
+    start_date: date,
+    end_date: date,
+    db: Session = Depends(get_db)
+):
+
+    quotations = db.query(models.Quotation).filter(
+        models.Quotation.created_at >= start_date,
+        models.Quotation.created_at <= end_date
+    ).order_by(models.Quotation.id.desc()).all()
+
+    return quotations
 
 # =====================================================
 # 🔥 LUXURY BROCHURE PDF ENGINE v1.0 (WRAP FIXED)

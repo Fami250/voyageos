@@ -1,9 +1,10 @@
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
+from sqlalchemy import func
 from decimal import Decimal
 from collections import defaultdict
-from datetime import datetime
+from datetime import datetime, date
 import os
 
 from reportlab.platypus import (
@@ -20,6 +21,7 @@ from app.database import get_db
 from app import models, schemas
 
 router = APIRouter(prefix="/quotations", tags=["Quotations"])
+
 
 # =====================================================
 # AUTO NUMBER
@@ -132,6 +134,11 @@ def get_quotation(quotation_id: int, db: Session = Depends(get_db)):
 
     return quotation
 
+
+# =====================================================
+# FIXED FILTER ROUTE (NO 500 ERROR)
+# =====================================================
+
 @router.get("/filter/by-date", response_model=list[schemas.QuotationResponse])
 def filter_quotations_by_date(
     start_date: date,
@@ -140,14 +147,15 @@ def filter_quotations_by_date(
 ):
 
     quotations = db.query(models.Quotation).filter(
-        models.Quotation.created_at >= start_date,
-        models.Quotation.created_at <= end_date
+        func.date(models.Quotation.created_at) >= start_date,
+        func.date(models.Quotation.created_at) <= end_date
     ).order_by(models.Quotation.id.desc()).all()
 
     return quotations
 
+
 # =====================================================
-# 🔥 LUXURY BROCHURE PDF ENGINE v1.0 (WRAP FIXED)
+# LUXURY BROCHURE PDF ENGINE v1.0 (WRAP FIXED)
 # =====================================================
 
 @router.get("/{quotation_id}/pdf")
@@ -177,7 +185,7 @@ def download_customer_pdf(quotation_id: int, db: Session = Depends(get_db)):
     elements = []
     styles = getSampleStyleSheet()
 
-    # ===== Detect Country =====
+    # Detect Country
     first_item = quotation.items[0]
     service = db.query(models.Service).filter(
         models.Service.id == first_item.service_id
@@ -193,9 +201,8 @@ def download_customer_pdf(quotation_id: int, db: Session = Depends(get_db)):
 
     country_name = country.name.lower()
 
-    # ===== Logo =====
+    # Logo
     logo_path = "app/static/uniworld_logo.png"
-
     if os.path.exists(logo_path):
         img = ImageReader(logo_path)
         iw, ih = img.getSize()
@@ -210,7 +217,7 @@ def download_customer_pdf(quotation_id: int, db: Session = Depends(get_db)):
         elements.append(logo)
         elements.append(Spacer(1, 15))
 
-    # ===== Banner =====
+    # Banner
     jpg_path = f"app/static/countries/{country_name}.jpg"
     png_path = f"app/static/countries/{country_name}.png"
     banner_path = jpg_path if os.path.exists(jpg_path) else png_path
@@ -225,7 +232,7 @@ def download_customer_pdf(quotation_id: int, db: Session = Depends(get_db)):
         elements.append(banner)
         elements.append(Spacer(1, 20))
 
-    # ===== Header =====
+    # Header
     elements.append(Paragraph(
         f"<b>{country.name} Holiday Package</b>",
         styles["Heading1"]
@@ -243,7 +250,6 @@ def download_customer_pdf(quotation_id: int, db: Session = Depends(get_db)):
 
     elements.append(Spacer(1, 20))
 
-    # ===== WRAP STYLE =====
     wrap_style = ParagraphStyle(
         "wrap_style",
         parent=styles["Normal"],
@@ -293,7 +299,7 @@ def download_customer_pdf(quotation_id: int, db: Session = Depends(get_db)):
     elements.append(table)
     elements.append(Spacer(1, 25))
 
-    # ===== Day Wise =====
+    # Day Wise
     elements.append(Paragraph("Day Wise Itinerary", styles["Heading2"]))
     elements.append(Spacer(1, 10))
 
@@ -306,7 +312,6 @@ def download_customer_pdf(quotation_id: int, db: Session = Depends(get_db)):
     day_counter = 1
 
     for travel_date in sorted_dates:
-
         elements.append(
             Paragraph(
                 f"<b>Day {day_counter} – {travel_date.strftime('%d %b %Y')}</b>",

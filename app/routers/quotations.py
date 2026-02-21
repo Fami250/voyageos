@@ -1,17 +1,16 @@
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
-from sqlalchemy import func
 from decimal import Decimal
-from datetime import date
-import os
 from collections import defaultdict
+from datetime import datetime
+import os
 
 from reportlab.platypus import (
     SimpleDocTemplate, Paragraph, Spacer,
     Table, TableStyle, Image
 )
-from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib import colors
 from reportlab.lib.units import inch
 from reportlab.lib.pagesizes import A4
@@ -21,7 +20,6 @@ from app.database import get_db
 from app import models, schemas
 
 router = APIRouter(prefix="/quotations", tags=["Quotations"])
-
 
 # =====================================================
 # AUTO NUMBER
@@ -136,7 +134,7 @@ def get_quotation(quotation_id: int, db: Session = Depends(get_db)):
 
 
 # =====================================================
-# 🔥 LUXURY BROCHURE PDF
+# 🔥 LUXURY BROCHURE PDF ENGINE v1.0
 # =====================================================
 
 @router.get("/{quotation_id}/pdf")
@@ -150,7 +148,7 @@ def download_customer_pdf(quotation_id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Quotation not found")
 
     if not quotation.items:
-        raise HTTPException(status_code=400, detail="No services in quotation")
+        raise HTTPException(status_code=400, detail="No services found")
 
     file_path = f"quotation_{quotation_id}.pdf"
 
@@ -159,18 +157,83 @@ def download_customer_pdf(quotation_id: int, db: Session = Depends(get_db)):
         pagesize=A4,
         rightMargin=40,
         leftMargin=40,
-        topMargin=50,
+        topMargin=40,
         bottomMargin=50
     )
 
     elements = []
     styles = getSampleStyleSheet()
 
-    # ================= HEADER =================
+    # =====================================================
+    # DETECT COUNTRY
+    # =====================================================
+
+    first_item = quotation.items[0]
+    service = db.query(models.Service).filter(
+        models.Service.id == first_item.service_id
+    ).first()
+
+    city = db.query(models.City).filter(
+        models.City.id == service.city_id
+    ).first()
+
+    country = db.query(models.Country).filter(
+        models.Country.id == city.country_id
+    ).first()
+
+    country_name = country.name.lower()
+
+    # =====================================================
+    # LOGO
+    # =====================================================
+
+    logo_path = "app/static/uniworld_logo.png"
+
+    if os.path.exists(logo_path):
+        img = ImageReader(logo_path)
+        iw, ih = img.getSize()
+        desired_width = 120
+        aspect = ih / iw
+        logo = Image(
+            logo_path,
+            width=desired_width,
+            height=desired_width * aspect
+        )
+        logo.hAlign = 'LEFT'
+        elements.append(logo)
+        elements.append(Spacer(1, 15))
+
+    # =====================================================
+    # COUNTRY BANNER
+    # =====================================================
+
+    jpg_path = f"app/static/countries/{country_name}.jpg"
+    png_path = f"app/static/countries/{country_name}.png"
+
+    banner_path = jpg_path if os.path.exists(jpg_path) else png_path
+
+    if os.path.exists(banner_path):
+        banner = Image(
+            banner_path,
+            width=A4[0] - 80,
+            height=3 * inch
+        )
+        banner.hAlign = 'CENTER'
+        elements.append(banner)
+        elements.append(Spacer(1, 20))
+
+    # =====================================================
+    # HEADER
+    # =====================================================
 
     elements.append(Paragraph(
-        f"<b>Quotation #{quotation.quotation_number}</b>",
-        styles["Heading2"]
+        f"<b>{country.name} Holiday Package</b>",
+        styles["Heading1"]
+    ))
+
+    elements.append(Paragraph(
+        f"Quotation #: {quotation.quotation_number}",
+        styles["Normal"]
     ))
 
     elements.append(Paragraph(
@@ -178,57 +241,85 @@ def download_customer_pdf(quotation_id: int, db: Session = Depends(get_db)):
         styles["Normal"]
     ))
 
-    elements.append(Spacer(1, 25))
+    elements.append(Spacer(1, 20))
 
-    # ================= TABLE =================
+    # =====================================================
+    # COST TABLE
+    # =====================================================
 
-    wrap_style = ParagraphStyle(
-        "wrap",
-        parent=styles["Normal"],
-        wordWrap="CJK"
-    )
-
-    data = [[
-        Paragraph("<b>Service</b>", styles["Normal"]),
-        Paragraph("<b>Qty</b>", styles["Normal"]),
-        Paragraph("<b>Amount</b>", styles["Normal"])
-    ]]
+    data = [["Service", "Qty", "Amount"]]
 
     for item in quotation.items:
         service = db.query(models.Service).filter(
             models.Service.id == item.service_id
         ).first()
 
-        service_name = service.name if service else "Service"
-
         data.append([
-            Paragraph(service_name, wrap_style),
-            Paragraph(str(item.quantity), styles["Normal"]),
-            Paragraph(f"{item.total_sell:,.0f}", styles["Normal"])
+            service.name,
+            str(item.quantity),
+            f"{item.total_sell:,.0f}"
         ])
 
-    data.append([
-        Paragraph("<b>Total Package Cost</b>", styles["Normal"]),
-        "",
-        Paragraph(f"<b>{quotation.total_sell:,.0f}</b>", styles["Normal"])
-    ])
+    data.append(["Total Package Cost", "", f"{quotation.total_sell:,.0f}"])
 
     table = Table(
         data,
-        colWidths=[4.2 * inch, 0.8 * inch, 1.3 * inch],
-        repeatRows=1
+        colWidths=[4.2 * inch, 0.8 * inch, 1.5 * inch],
+        hAlign="LEFT"
     )
 
     table.setStyle(TableStyle([
         ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#163E82")),
         ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
-        ("GRID", (0, 0), (-1, -1), 0.3, colors.grey),
+        ("BACKGROUND", (0, -1), (-1, -1), colors.whitesmoke),
+        ("LINEABOVE", (0, -1), (-1, -1), 1, colors.black),
         ("ALIGN", (1, 1), (1, -1), "CENTER"),
         ("ALIGN", (2, 1), (2, -1), "RIGHT"),
-        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("GRID", (0, 0), (-1, -1), 0.3, colors.grey),
     ]))
 
     elements.append(table)
+    elements.append(Spacer(1, 25))
+
+    # =====================================================
+    # DAY WISE ITINERARY
+    # =====================================================
+
+    elements.append(Paragraph("Day Wise Itinerary", styles["Heading2"]))
+    elements.append(Spacer(1, 10))
+
+    grouped = defaultdict(list)
+
+    for item in quotation.items:
+        grouped[item.start_date].append(item)
+
+    sorted_dates = sorted(grouped.keys())
+    day_counter = 1
+
+    for travel_date in sorted_dates:
+
+        elements.append(
+            Paragraph(
+                f"<b>Day {day_counter} – {travel_date.strftime('%d %b %Y')}</b>",
+                styles["Normal"]
+            )
+        )
+
+        for item in grouped[travel_date]:
+            service = db.query(models.Service).filter(
+                models.Service.id == item.service_id
+            ).first()
+
+            city = db.query(models.City).filter(
+                models.City.id == service.city_id
+            ).first()
+
+            elements.append(
+                Paragraph(f"• {city.name} – {service.name}", styles["Normal"])
+            )
+
+        elements.append(Spacer(1, 8))
+        day_counter += 1
 
     doc.build(elements)
 

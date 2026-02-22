@@ -119,7 +119,25 @@ def create_quotation(data: schemas.QuotationCreate, db: Session = Depends(get_db
 
 
 # =====================================================
-# GET SINGLE (🔥 FIXED WITH JOINEDLOAD)
+# GET ALL QUOTATIONS (🔥 REQUIRED FOR LIST PAGE)
+# =====================================================
+
+@router.get("/", response_model=list[schemas.QuotationResponse])
+def get_all_quotations(db: Session = Depends(get_db)):
+
+    quotations = db.query(models.Quotation).options(
+        joinedload(models.Quotation.client),
+        joinedload(models.Quotation.items)
+        .joinedload(models.QuotationItem.service)
+        .joinedload(models.Service.city)
+        .joinedload(models.City.country)
+    ).order_by(models.Quotation.id.desc()).all()
+
+    return quotations
+
+
+# =====================================================
+# GET SINGLE
 # =====================================================
 
 @router.get("/{quotation_id}", response_model=schemas.QuotationResponse)
@@ -127,7 +145,10 @@ def get_quotation(quotation_id: int, db: Session = Depends(get_db)):
 
     quotation = db.query(models.Quotation).options(
         joinedload(models.Quotation.client),
-        joinedload(models.Quotation.items).joinedload(models.QuotationItem.service)
+        joinedload(models.Quotation.items)
+        .joinedload(models.QuotationItem.service)
+        .joinedload(models.Service.city)
+        .joinedload(models.City.country)
     ).filter(
         models.Quotation.id == quotation_id
     ).first()
@@ -139,7 +160,7 @@ def get_quotation(quotation_id: int, db: Session = Depends(get_db)):
 
 
 # =====================================================
-# FILTER ROUTE (🔥 FIXED WITH JOINEDLOAD)
+# FILTER BY DATE
 # =====================================================
 
 @router.get("/filter/by-date", response_model=list[schemas.QuotationResponse])
@@ -151,7 +172,10 @@ def filter_quotations_by_date(
 
     quotations = db.query(models.Quotation).options(
         joinedload(models.Quotation.client),
-        joinedload(models.Quotation.items).joinedload(models.QuotationItem.service)
+        joinedload(models.Quotation.items)
+        .joinedload(models.QuotationItem.service)
+        .joinedload(models.Service.city)
+        .joinedload(models.City.country)
     ).filter(
         func.date(models.Quotation.created_at) >= start_date,
         func.date(models.Quotation.created_at) <= end_date
@@ -168,7 +192,10 @@ def filter_quotations_by_date(
 def download_customer_pdf(quotation_id: int, db: Session = Depends(get_db)):
 
     quotation = db.query(models.Quotation).options(
-        joinedload(models.Quotation.items).joinedload(models.QuotationItem.service)
+        joinedload(models.Quotation.items)
+        .joinedload(models.QuotationItem.service)
+        .joinedload(models.Service.city)
+        .joinedload(models.City.country)
     ).filter(
         models.Quotation.id == quotation_id
     ).first()
@@ -194,9 +221,7 @@ def download_customer_pdf(quotation_id: int, db: Session = Depends(get_db)):
     styles = getSampleStyleSheet()
 
     first_item = quotation.items[0]
-    service = first_item.service
-    city = service.city
-    country = city.country
+    country = first_item.service.city.country
     country_name = country.name.lower()
 
     logo_path = "app/static/uniworld_logo.png"
@@ -258,8 +283,7 @@ def download_customer_pdf(quotation_id: int, db: Session = Depends(get_db)):
     ]]
 
     for item in quotation.items:
-        service_name = item.service.name if item.service else "Service"
-
+        service_name = item.service.name
         data.append([
             Paragraph(service_name, wrap_style),
             Paragraph(str(item.quantity), styles["Normal"]),
@@ -310,11 +334,11 @@ def download_customer_pdf(quotation_id: int, db: Session = Depends(get_db)):
         )
 
         for item in grouped[travel_date]:
-            service_name = item.service.name if item.service else "Service"
-            city_name = item.service.city.name if item.service else ""
-
             elements.append(
-                Paragraph(f"• {city_name} – {service_name}", styles["Normal"])
+                Paragraph(
+                    f"• {item.service.city.name} – {item.service.name}",
+                    styles["Normal"]
+                )
             )
 
         elements.append(Spacer(1, 8))

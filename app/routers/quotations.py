@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import FileResponse
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import func
 from decimal import Decimal
 from collections import defaultdict
@@ -119,13 +119,16 @@ def create_quotation(data: schemas.QuotationCreate, db: Session = Depends(get_db
 
 
 # =====================================================
-# GET SINGLE
+# GET SINGLE (🔥 FIXED WITH JOINEDLOAD)
 # =====================================================
 
 @router.get("/{quotation_id}", response_model=schemas.QuotationResponse)
 def get_quotation(quotation_id: int, db: Session = Depends(get_db)):
 
-    quotation = db.query(models.Quotation).filter(
+    quotation = db.query(models.Quotation).options(
+        joinedload(models.Quotation.client),
+        joinedload(models.Quotation.items).joinedload(models.QuotationItem.service)
+    ).filter(
         models.Quotation.id == quotation_id
     ).first()
 
@@ -136,7 +139,7 @@ def get_quotation(quotation_id: int, db: Session = Depends(get_db)):
 
 
 # =====================================================
-# FIXED FILTER ROUTE (NO 500 ERROR)
+# FILTER ROUTE (🔥 FIXED WITH JOINEDLOAD)
 # =====================================================
 
 @router.get("/filter/by-date", response_model=list[schemas.QuotationResponse])
@@ -146,7 +149,10 @@ def filter_quotations_by_date(
     db: Session = Depends(get_db)
 ):
 
-    quotations = db.query(models.Quotation).filter(
+    quotations = db.query(models.Quotation).options(
+        joinedload(models.Quotation.client),
+        joinedload(models.Quotation.items).joinedload(models.QuotationItem.service)
+    ).filter(
         func.date(models.Quotation.created_at) >= start_date,
         func.date(models.Quotation.created_at) <= end_date
     ).order_by(models.Quotation.id.desc()).all()
@@ -155,13 +161,15 @@ def filter_quotations_by_date(
 
 
 # =====================================================
-# LUXURY BROCHURE PDF ENGINE v1.0 (WRAP FIXED)
+# LUXURY BROCHURE PDF ENGINE v1.0
 # =====================================================
 
 @router.get("/{quotation_id}/pdf")
 def download_customer_pdf(quotation_id: int, db: Session = Depends(get_db)):
 
-    quotation = db.query(models.Quotation).filter(
+    quotation = db.query(models.Quotation).options(
+        joinedload(models.Quotation.items).joinedload(models.QuotationItem.service)
+    ).filter(
         models.Quotation.id == quotation_id
     ).first()
 
@@ -185,23 +193,12 @@ def download_customer_pdf(quotation_id: int, db: Session = Depends(get_db)):
     elements = []
     styles = getSampleStyleSheet()
 
-    # Detect Country
     first_item = quotation.items[0]
-    service = db.query(models.Service).filter(
-        models.Service.id == first_item.service_id
-    ).first()
-
-    city = db.query(models.City).filter(
-        models.City.id == service.city_id
-    ).first()
-
-    country = db.query(models.Country).filter(
-        models.Country.id == city.country_id
-    ).first()
-
+    service = first_item.service
+    city = service.city
+    country = city.country
     country_name = country.name.lower()
 
-    # Logo
     logo_path = "app/static/uniworld_logo.png"
     if os.path.exists(logo_path):
         img = ImageReader(logo_path)
@@ -217,7 +214,6 @@ def download_customer_pdf(quotation_id: int, db: Session = Depends(get_db)):
         elements.append(logo)
         elements.append(Spacer(1, 15))
 
-    # Banner
     jpg_path = f"app/static/countries/{country_name}.jpg"
     png_path = f"app/static/countries/{country_name}.png"
     banner_path = jpg_path if os.path.exists(jpg_path) else png_path
@@ -232,7 +228,6 @@ def download_customer_pdf(quotation_id: int, db: Session = Depends(get_db)):
         elements.append(banner)
         elements.append(Spacer(1, 20))
 
-    # Header
     elements.append(Paragraph(
         f"<b>{country.name} Holiday Package</b>",
         styles["Heading1"]
@@ -263,11 +258,7 @@ def download_customer_pdf(quotation_id: int, db: Session = Depends(get_db)):
     ]]
 
     for item in quotation.items:
-        service = db.query(models.Service).filter(
-            models.Service.id == item.service_id
-        ).first()
-
-        service_name = service.name if service else "Service"
+        service_name = item.service.name if item.service else "Service"
 
         data.append([
             Paragraph(service_name, wrap_style),
@@ -299,7 +290,6 @@ def download_customer_pdf(quotation_id: int, db: Session = Depends(get_db)):
     elements.append(table)
     elements.append(Spacer(1, 25))
 
-    # Day Wise
     elements.append(Paragraph("Day Wise Itinerary", styles["Heading2"]))
     elements.append(Spacer(1, 10))
 
@@ -320,16 +310,11 @@ def download_customer_pdf(quotation_id: int, db: Session = Depends(get_db)):
         )
 
         for item in grouped[travel_date]:
-            service = db.query(models.Service).filter(
-                models.Service.id == item.service_id
-            ).first()
-
-            city = db.query(models.City).filter(
-                models.City.id == service.city_id
-            ).first()
+            service_name = item.service.name if item.service else "Service"
+            city_name = item.service.city.name if item.service else ""
 
             elements.append(
-                Paragraph(f"• {city.name} – {service.name}", styles["Normal"])
+                Paragraph(f"• {city_name} – {service_name}", styles["Normal"])
             )
 
         elements.append(Spacer(1, 8))

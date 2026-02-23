@@ -36,9 +36,16 @@ def create_quotation_item(
     if not service:
         raise HTTPException(status_code=404, detail="Service not found")
 
-    # Example pricing logic (simplified)
-    cost_price = Decimal(data.manual_fare or 0)
-    margin_percent = Decimal(data.manual_margin_percentage or 0)
+    # 🔥 Business Rule: Cannot use both vendor and external supplier
+    if data.vendor_id and data.external_supplier_id:
+        raise HTTPException(
+            status_code=400,
+            detail="Cannot use both vendor and external supplier for same item"
+        )
+
+    # Pricing logic
+    cost_price = Decimal(str(data.cost_price))
+    margin_percent = Decimal(str(data.manual_margin_percentage or 0))
 
     sell_price = cost_price + (cost_price * margin_percent / 100)
 
@@ -48,10 +55,12 @@ def create_quotation_item(
     item = models.QuotationItem(
         quotation_id=data.quotation_id,
         service_id=data.service_id,
+        vendor_id=data.vendor_id,
+        external_supplier_id=data.external_supplier_id,
+        external_product_id=data.external_product_id,
         quantity=data.quantity,
         start_date=data.start_date,
         end_date=data.end_date,
-        manual_fare=data.manual_fare,
         manual_margin_percentage=data.manual_margin_percentage,
         cost_price=float(cost_price),
         sell_price=float(sell_price),

@@ -44,6 +44,7 @@ from app.routers.invoices import router as invoices_router
 from app.routers.dashboard import router as dashboard_router
 from app.routers.payments import router as payments_router
 from app.routers.accounts import router as accounts_router
+from app.routers.external_suppliers import router as external_suppliers_router  # ✅ NEW
 
 # =====================================================
 # STATIC FILES
@@ -71,6 +72,7 @@ app.include_router(invoices_router)
 app.include_router(dashboard_router)
 app.include_router(payments_router)
 app.include_router(accounts_router)
+app.include_router(external_suppliers_router)  # ✅ NEW
 
 # =====================================================
 # ROOT

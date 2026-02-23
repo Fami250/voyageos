@@ -1,356 +1,370 @@
-from fastapi import APIRouter, Depends, HTTPException
-from fastapi.responses import FileResponse
-from sqlalchemy.orm import Session, joinedload
-from sqlalchemy import func
-from decimal import Decimal
-from collections import defaultdict
-from datetime import datetime, date
-import os
-
-from reportlab.platypus import (
-    SimpleDocTemplate, Paragraph, Spacer,
-    Table, TableStyle, Image
-)
-from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-from reportlab.lib import colors
-from reportlab.lib.units import inch
-from reportlab.lib.pagesizes import A4
-from reportlab.lib.utils import ImageReader
-
-from app.database import get_db
-from app import models, schemas
-
-router = APIRouter(prefix="/quotations", tags=["Quotations"])
-
-
-# =====================================================
-# AUTO NUMBER
-# =====================================================
-
-def generate_quotation_number(db: Session):
-    last = db.query(models.Quotation).order_by(
-        models.Quotation.id.desc()
-    ).first()
-
-    if not last:
-        return "QT-0001"
-
-    try:
-        last_number = int(last.quotation_number.split("-")[1])
-        return f"QT-{last_number + 1:04d}"
-    except:
-        return f"QT-{last.id + 1:04d}"
-
-
-# =====================================================
-# CREATE QUOTATION
-# =====================================================
-
-@router.post("/", response_model=schemas.QuotationResponse)
-def create_quotation(data: schemas.QuotationCreate, db: Session = Depends(get_db)):
-
-    client = db.query(models.Client).filter(
-        models.Client.id == data.client_id
-    ).first()
-
-    if not client:
-        raise HTTPException(status_code=404, detail="Client not found")
-
-    quotation = models.Quotation(
-        quotation_number=generate_quotation_number(db),
-        client_id=data.client_id,
-        margin_percentage=data.margin_percentage or 0,
-        status=models.QuotationStatus.DRAFT
-    )
-
-    db.add(quotation)
-    db.flush()
-
-    total_cost = Decimal("0")
-    total_sell = Decimal("0")
-
-    for item in data.items:
-
-        service = db.query(models.Service).filter(
-            models.Service.id == item.service_id
-        ).first()
-
-        if not service:
-            raise HTTPException(status_code=404, detail="Service not found")
-
-        cost_price = Decimal(str(item.cost_price))
-        margin = Decimal(str(
-            item.manual_margin_percentage
-            if item.manual_margin_percentage is not None
-            else data.margin_percentage or 0
-        ))
-
-        sell_price = cost_price + (cost_price * margin / Decimal("100"))
-
-        item_total_cost = cost_price * item.quantity
-        item_total_sell = sell_price * item.quantity
-
-        db_item = models.QuotationItem(
-            quotation_id=quotation.id,
-            service_id=service.id,
-            vendor_id=item.vendor_id,
-            quantity=item.quantity,
-            start_date=item.start_date,
-            end_date=item.end_date,
-            cost_price=float(cost_price),
-            sell_price=float(sell_price),
-            total_cost=float(item_total_cost),
-            total_sell=float(item_total_sell)
-        )
-
-        db.add(db_item)
-
-        total_cost += item_total_cost
-        total_sell += item_total_sell
-
-    quotation.total_cost = float(total_cost)
-    quotation.total_sell = float(total_sell)
-    quotation.total_profit = float(total_sell - total_cost)
-
-    db.commit()
-    db.refresh(quotation)
-
-    return quotation
-
-
-# =====================================================
-# GET ALL QUOTATIONS (🔥 REQUIRED FOR LIST PAGE)
-# =====================================================
-
-@router.get("/", response_model=list[schemas.QuotationResponse])
-def get_all_quotations(db: Session = Depends(get_db)):
-
-    quotations = db.query(models.Quotation).options(
-        joinedload(models.Quotation.client),
-        joinedload(models.Quotation.items)
-        .joinedload(models.QuotationItem.service)
-        .joinedload(models.Service.city)
-        .joinedload(models.City.country)
-    ).order_by(models.Quotation.id.desc()).all()
-
-    return quotations
-
-
-# =====================================================
-# GET SINGLE
-# =====================================================
-
-@router.get("/{quotation_id}", response_model=schemas.QuotationResponse)
-def get_quotation(quotation_id: int, db: Session = Depends(get_db)):
-
-    quotation = db.query(models.Quotation).options(
-        joinedload(models.Quotation.client),
-        joinedload(models.Quotation.items)
-        .joinedload(models.QuotationItem.service)
-        .joinedload(models.Service.city)
-        .joinedload(models.City.country)
-    ).filter(
-        models.Quotation.id == quotation_id
-    ).first()
-
-    if not quotation:
-        raise HTTPException(status_code=404, detail="Quotation not found")
-
-    return quotation
-
-
-# =====================================================
-# FILTER BY DATE
-# =====================================================
-
-@router.get("/filter/by-date", response_model=list[schemas.QuotationResponse])
-def filter_quotations_by_date(
-    start_date: date,
-    end_date: date,
-    db: Session = Depends(get_db)
-):
-
-    quotations = db.query(models.Quotation).options(
-        joinedload(models.Quotation.client),
-        joinedload(models.Quotation.items)
-        .joinedload(models.QuotationItem.service)
-        .joinedload(models.Service.city)
-        .joinedload(models.City.country)
-    ).filter(
-        func.date(models.Quotation.created_at) >= start_date,
-        func.date(models.Quotation.created_at) <= end_date
-    ).order_by(models.Quotation.id.desc()).all()
-
-    return quotations
-
-
-# =====================================================
-# LUXURY BROCHURE PDF ENGINE v1.0
-# =====================================================
-
-@router.get("/{quotation_id}/pdf")
-def download_customer_pdf(quotation_id: int, db: Session = Depends(get_db)):
-
-    quotation = db.query(models.Quotation).options(
-        joinedload(models.Quotation.items)
-        .joinedload(models.QuotationItem.service)
-        .joinedload(models.Service.city)
-        .joinedload(models.City.country)
-    ).filter(
-        models.Quotation.id == quotation_id
-    ).first()
-
-    if not quotation:
-        raise HTTPException(status_code=404, detail="Quotation not found")
-
-    if not quotation.items:
-        raise HTTPException(status_code=400, detail="No services found")
-
-    file_path = f"quotation_{quotation_id}.pdf"
-
-    doc = SimpleDocTemplate(
-        file_path,
-        pagesize=A4,
-        rightMargin=40,
-        leftMargin=40,
-        topMargin=40,
-        bottomMargin=50
-    )
-
-    elements = []
-    styles = getSampleStyleSheet()
-
-    first_item = quotation.items[0]
-    country = first_item.service.city.country
-    country_name = country.name.lower()
-
-    logo_path = "app/static/uniworld_logo.png"
-    if os.path.exists(logo_path):
-        img = ImageReader(logo_path)
-        iw, ih = img.getSize()
-        desired_width = 120
-        aspect = ih / iw
-        logo = Image(
-            logo_path,
-            width=desired_width,
-            height=desired_width * aspect
-        )
-        logo.hAlign = 'LEFT'
-        elements.append(logo)
-        elements.append(Spacer(1, 15))
-
-    jpg_path = f"app/static/countries/{country_name}.jpg"
-    png_path = f"app/static/countries/{country_name}.png"
-    banner_path = jpg_path if os.path.exists(jpg_path) else png_path
-
-    if os.path.exists(banner_path):
-        banner = Image(
-            banner_path,
-            width=A4[0] - 80,
-            height=3 * inch
-        )
-        banner.hAlign = 'CENTER'
-        elements.append(banner)
-        elements.append(Spacer(1, 20))
-
-    elements.append(Paragraph(
-        f"<b>{country.name} Holiday Package</b>",
-        styles["Heading1"]
-    ))
-
-    elements.append(Paragraph(
-        f"Quotation #: {quotation.quotation_number}",
-        styles["Normal"]
-    ))
-
-    elements.append(Paragraph(
-        f"Date: {quotation.created_at.strftime('%d %B %Y')}",
-        styles["Normal"]
-    ))
-
-    elements.append(Spacer(1, 20))
-
-    wrap_style = ParagraphStyle(
-        "wrap_style",
-        parent=styles["Normal"],
-        wordWrap="CJK"
-    )
-
-    data = [[
-        Paragraph("<b>Service</b>", styles["Normal"]),
-        Paragraph("<b>Qty</b>", styles["Normal"]),
-        Paragraph("<b>Amount</b>", styles["Normal"])
-    ]]
-
-    for item in quotation.items:
-        service_name = item.service.name
-        data.append([
-            Paragraph(service_name, wrap_style),
-            Paragraph(str(item.quantity), styles["Normal"]),
-            Paragraph(f"{item.total_sell:,.0f}", styles["Normal"])
-        ])
-
-    data.append([
-        Paragraph("<b>Total Package Cost</b>", styles["Normal"]),
-        "",
-        Paragraph(f"<b>{quotation.total_sell:,.0f}</b>", styles["Normal"])
-    ])
-
-    table = Table(
-        data,
-        colWidths=[4.0 * inch, 0.8 * inch, 1.4 * inch],
-        repeatRows=1
-    )
-
-    table.setStyle(TableStyle([
-        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#163E82")),
-        ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
-        ("GRID", (0, 0), (-1, -1), 0.3, colors.grey),
-        ("ALIGN", (1, 1), (1, -1), "CENTER"),
-        ("ALIGN", (2, 1), (2, -1), "RIGHT"),
-        ("VALIGN", (0, 0), (-1, -1), "TOP"),
-    ]))
-
-    elements.append(table)
-    elements.append(Spacer(1, 25))
-
-    elements.append(Paragraph("Day Wise Itinerary", styles["Heading2"]))
-    elements.append(Spacer(1, 10))
-
-    grouped = defaultdict(list)
-
-    for item in quotation.items:
-        grouped[item.start_date].append(item)
-
-    sorted_dates = sorted(grouped.keys())
-    day_counter = 1
-
-    for travel_date in sorted_dates:
-        elements.append(
-            Paragraph(
-                f"<b>Day {day_counter} – {travel_date.strftime('%d %b %Y')}</b>",
-                styles["Normal"]
-            )
-        )
-
-        for item in grouped[travel_date]:
-            elements.append(
-                Paragraph(
-                    f"• {item.service.city.name} – {item.service.name}",
-                    styles["Normal"]
-                )
-            )
-
-        elements.append(Spacer(1, 8))
-        day_counter += 1
-
-    doc.build(elements)
-
-    return FileResponse(
-        file_path,
-        media_type="application/pdf",
-        headers={
-            "Content-Disposition":
-                f'inline; filename="{quotation.quotation_number}.pdf"'
-        }
-    )
+import { useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
+import { authFetch } from "../api/api";
+
+export default function Quotations() {
+
+  const navigate = useNavigate();
+
+  const [clients, setClients] = useState([]);
+  const [cities, setCities] = useState([]);
+  const [services, setServices] = useState([]);
+  const [vendors, setVendors] = useState([]);
+
+  const [selectedClient, setSelectedClient] = useState("");
+  const [margin, setMargin] = useState(25);
+
+  const emptyRow = {
+    city_id: "",
+    category: "",
+    service_id: "",
+    vendor_id: "",
+    cost_price: "",
+    manual_margin_percentage: "",
+    start_date: "",
+    end_date: "",
+    quantity: 1
+  };
+
+  const [items, setItems] = useState([{ ...emptyRow }]);
+
+  // ================= LOAD INITIAL =================
+  useEffect(() => {
+    loadInitialData();
+  }, []);
+
+  const loadInitialData = async () => {
+    try {
+      const [cRes, cityRes, sRes, vRes] = await Promise.all([
+        authFetch("/clients/"),
+        authFetch("/cities/"),
+        authFetch("/services/"),
+        authFetch("/vendors/")
+      ]);
+
+      setClients(await cRes.json());
+      setCities(await cityRes.json());
+      setServices(await sRes.json());
+      setVendors(await vRes.json());
+
+    } catch (err) {
+      console.error("Initial Load Error:", err);
+    }
+  };
+
+  // ================= FILTER SERVICES =================
+  const filteredServices = (cityId, category) => {
+    return services.filter(
+      s =>
+        String(s.city_id) === String(cityId) &&
+        s.category?.toUpperCase() === category?.toUpperCase()
+    );
+  };
+
+  // ================= UPDATE FIELD =================
+  const updateField = (index, field, value) => {
+    const updated = [...items];
+    updated[index][field] = value;
+
+    if (field === "city_id") {
+      updated[index] = {
+        ...emptyRow,
+        city_id: value
+      };
+    }
+
+    if (field === "category") {
+      updated[index].service_id = "";
+    }
+
+    if (field === "start_date" || field === "end_date") {
+      const start = new Date(updated[index].start_date);
+      const end = new Date(updated[index].end_date);
+
+      if (!isNaN(start) && !isNaN(end) && end > start) {
+        const diff = Math.ceil((end - start) / (1000 * 60 * 60 * 24));
+        updated[index].quantity = diff;
+      }
+    }
+
+    setItems(updated);
+  };
+
+  const removeRow = (index) => {
+    const updated = [...items];
+    updated.splice(index, 1);
+    setItems(updated);
+  };
+
+  const addNewRow = () => {
+    setItems([...items, { ...emptyRow }]);
+  };
+
+  // ================= CALCULATIONS =================
+  const calculateRow = (item) => {
+    const cost = Number(item.cost_price) || 0;
+    const qty = Number(item.quantity) || 0;
+
+    const rowMargin =
+      item.manual_margin_percentage !== ""
+        ? Number(item.manual_margin_percentage)
+        : margin;
+
+    const sellUnit = cost + (cost * rowMargin / 100);
+    const totalCost = cost * qty;
+    const totalSell = sellUnit * qty;
+    const profit = totalSell - totalCost;
+
+    return { totalCost, totalSell, profit };
+  };
+
+  const totals = items.reduce((acc, item) => {
+    const row = calculateRow(item);
+    acc.cost += row.totalCost;
+    acc.sell += row.totalSell;
+    acc.profit += row.profit;
+    return acc;
+  }, { cost: 0, sell: 0, profit: 0 });
+
+  // ================= SAVE QUOTATION =================
+  const saveQuotation = async () => {
+
+    if (!selectedClient) {
+      alert("Select Client");
+      return;
+    }
+
+    const validItems = items.filter(i =>
+      i.service_id &&
+      i.cost_price &&
+      i.start_date &&
+      i.end_date &&
+      Number(i.quantity) > 0
+    );
+
+    if (validItems.length === 0) {
+      alert("Add at least one valid service row");
+      return;
+    }
+
+    const payload = {
+      client_id: Number(selectedClient),
+      margin_percentage: margin,
+      items: validItems.map(i => ({
+        service_id: Number(i.service_id),
+        vendor_id: i.vendor_id ? Number(i.vendor_id) : null,
+        cost_price: Number(i.cost_price),
+        quantity: Number(i.quantity),
+        start_date: i.start_date,
+        end_date: i.end_date,
+        manual_margin_percentage:
+          i.manual_margin_percentage !== ""
+            ? Number(i.manual_margin_percentage)
+            : null
+      }))
+    };
+
+    try {
+      const res = await authFetch("/quotations/", {
+        method: "POST",
+        body: payload
+      });
+
+      if (!res.ok) {
+        const err = await res.json();
+        alert(err.detail || "Error saving quotation");
+        return;
+      }
+
+      const data = await res.json();
+      navigate(`/quotation/${data.id}`);
+
+    } catch (err) {
+      console.error("Save error:", err);
+      alert("Server connection error");
+    }
+  };
+
+  // ================= UI =================
+  return (
+    <div className="flex bg-gray-100 min-h-screen">
+
+      <div className="w-3/4 p-8">
+
+        <h1 className="text-3xl font-bold mb-6">
+          Create Quotation
+        </h1>
+
+        <div className="bg-white p-6 rounded-xl shadow mb-6 grid grid-cols-2 gap-6">
+
+          <div>
+            <label className="block mb-1 font-semibold">Client</label>
+            <select
+              value={selectedClient}
+              onChange={(e) => setSelectedClient(e.target.value)}
+              className="border p-2 rounded w-full"
+            >
+              <option value="">Select Client</option>
+              {clients.map(c => (
+                <option key={c.id} value={c.id}>
+                  {c.company_name}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div>
+            <label className="block mb-1 font-semibold">Global Margin %</label>
+            <input
+              type="number"
+              value={margin}
+              min="0"
+              className="border p-2 rounded w-full"
+              onChange={(e) => setMargin(Number(e.target.value))}
+            />
+          </div>
+
+        </div>
+
+        <div className="bg-white p-6 rounded-xl shadow">
+          {items.map((item, index) => {
+
+            const row = calculateRow(item);
+
+            return (
+              <div key={index} className="grid grid-cols-10 gap-2 mb-2 text-sm">
+
+                <select
+                  value={item.city_id}
+                  onChange={(e) => updateField(index, "city_id", e.target.value)}
+                  className="border p-1 rounded"
+                >
+                  <option value="">City</option>
+                  {cities.map(c => (
+                    <option key={c.id} value={c.id}>{c.name}</option>
+                  ))}
+                </select>
+
+                <select
+                  value={item.category}
+                  onChange={(e) => updateField(index, "category", e.target.value)}
+                  className="border p-1 rounded"
+                >
+                  <option value="">Type</option>
+                  <option value="HOTEL">Hotel</option>
+                  <option value="TOUR">Tour</option>
+                  <option value="TRANSFER">Transfer</option>
+                  <option value="VISA">Visa</option>
+                  <option value="TICKET">Ticket</option>
+                </select>
+
+                <select
+                  value={item.service_id}
+                  onChange={(e) => updateField(index, "service_id", e.target.value)}
+                  className="border p-1 rounded"
+                >
+                  <option value="">Service</option>
+                  {filteredServices(item.city_id, item.category).map(s => (
+                    <option key={s.id} value={s.id}>{s.name}</option>
+                  ))}
+                </select>
+
+                <select
+                  value={item.vendor_id}
+                  onChange={(e) => updateField(index, "vendor_id", e.target.value)}
+                  className="border p-1 rounded"
+                >
+                  <option value="">Vendor</option>
+                  {vendors.map(v => (
+                    <option key={v.id} value={v.id}>{v.name}</option>
+                  ))}
+                </select>
+
+                <input
+                  type="number"
+                  placeholder="Cost"
+                  value={item.cost_price}
+                  onChange={(e) => updateField(index, "cost_price", e.target.value)}
+                  className="border p-1 rounded"
+                />
+
+                <input
+                  type="number"
+                  placeholder="%"
+                  value={item.manual_margin_percentage}
+                  onChange={(e) => updateField(index, "manual_margin_percentage", e.target.value)}
+                  className="border p-1 rounded"
+                />
+
+                <input
+                  type="date"
+                  value={item.start_date}
+                  onChange={(e) => updateField(index, "start_date", e.target.value)}
+                  className="border p-1 rounded"
+                />
+
+                <input
+                  type="date"
+                  value={item.end_date}
+                  onChange={(e) => updateField(index, "end_date", e.target.value)}
+                  className="border p-1 rounded"
+                />
+
+                <div className="p-1 font-semibold text-green-600">
+                  {row.totalSell.toFixed(0)}
+                </div>
+
+                <button
+                  onClick={() => removeRow(index)}
+                  className="bg-red-500 text-white rounded px-2"
+                >
+                  X
+                </button>
+
+              </div>
+            );
+          })}
+
+          <button
+            onClick={addNewRow}
+            className="mt-4 bg-blue-600 text-white px-4 py-2 rounded"
+          >
+            + Add Row
+          </button>
+        </div>
+
+      </div>
+
+      <div className="w-1/4 p-6 bg-white shadow-lg sticky top-0 h-screen">
+
+        <h2 className="text-xl font-bold mb-6">Summary</h2>
+
+        <div className="space-y-4 text-sm">
+          <div className="flex justify-between">
+            <span>Total Cost</span>
+            <span>{totals.cost.toFixed(0)}</span>
+          </div>
+
+          <div className="flex justify-between">
+            <span>Total Sell</span>
+            <span>{totals.sell.toFixed(0)}</span>
+          </div>
+
+          <div className="flex justify-between font-semibold text-green-600">
+            <span>Total Profit</span>
+            <span>{totals.profit.toFixed(0)}</span>
+          </div>
+        </div>
+
+        <button
+          onClick={saveQuotation}
+          className="mt-8 w-full bg-green-600 text-white py-3 rounded-lg font-semibold"
+        >
+          Save Quotation
+        </button>
+
+      </div>
+
+    </div>
+  );
+}

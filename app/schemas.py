@@ -41,6 +41,23 @@ class ServiceCategory(str, Enum):
 
 
 # =====================================================
+# 🔥 NEW – EXTERNAL SUPPLIER ENUMS
+# =====================================================
+
+class SupplierType(str, Enum):
+    HOTEL = "HOTEL"
+    TOUR = "TOUR"
+    TRANSFER = "TRANSFER"
+    OTHER = "OTHER"
+
+
+class SupplierAPIType(str, Enum):
+    REST = "REST"
+    XML = "XML"
+    MANUAL = "MANUAL"
+
+
+# =====================================================
 # COUNTRY
 # =====================================================
 
@@ -177,6 +194,36 @@ class ServiceResponse(ServiceBase):
 
 
 # =====================================================
+# 🔥 NEW – EXTERNAL SUPPLIER SCHEMAS
+# =====================================================
+
+class ExternalSupplierBase(BaseModel):
+    name: str
+    supplier_type: SupplierType
+    api_type: SupplierAPIType = SupplierAPIType.MANUAL
+    is_active: Optional[bool] = True
+
+
+class ExternalSupplierCreate(ExternalSupplierBase):
+    pass
+
+
+class ExternalSupplierUpdate(BaseModel):
+    name: Optional[str] = None
+    supplier_type: Optional[SupplierType] = None
+    api_type: Optional[SupplierAPIType] = None
+    is_active: Optional[bool] = None
+
+
+class ExternalSupplierResponse(ExternalSupplierBase):
+    id: int
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+# =====================================================
 # QUOTATION ITEM
 # =====================================================
 
@@ -204,8 +251,6 @@ class QuotationItemResponse(BaseModel):
     sell_price: float
     total_cost: float
     total_sell: float
-
-    # 🔥 ADDED (for frontend service.name)
     service: Optional[ServiceResponse] = None
 
     class Config:
@@ -233,8 +278,6 @@ class QuotationResponse(BaseModel):
     status: QuotationStatus
     created_at: datetime
     items: List[QuotationItemResponse]
-
-    # 🔥 ADDED (for frontend client.company_name)
     client: Optional[ClientResponse] = None
 
     class Config:

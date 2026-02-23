@@ -3,12 +3,7 @@ from sqlalchemy.orm import Session
 from typing import List
 
 from app.database import get_db
-from app import models
-from app.schemas.external_supplier import (
-    ExternalSupplierCreate,
-    ExternalSupplierUpdate,
-    ExternalSupplierOut
-)
+from app import models, schemas
 
 router = APIRouter(
     prefix="/external-suppliers",
@@ -16,8 +11,9 @@ router = APIRouter(
 )
 
 
-@router.post("/", response_model=ExternalSupplierOut)
-def create_supplier(data: ExternalSupplierCreate, db: Session = Depends(get_db)):
+@router.post("/", response_model=schemas.ExternalSupplierResponse)
+def create_supplier(data: schemas.ExternalSupplierCreate, db: Session = Depends(get_db)):
+
     existing = db.query(models.ExternalSupplier).filter_by(name=data.name).first()
     if existing:
         raise HTTPException(status_code=400, detail="Supplier already exists")
@@ -29,12 +25,12 @@ def create_supplier(data: ExternalSupplierCreate, db: Session = Depends(get_db))
     return supplier
 
 
-@router.get("/", response_model=List[ExternalSupplierOut])
+@router.get("/", response_model=List[schemas.ExternalSupplierResponse])
 def list_suppliers(db: Session = Depends(get_db)):
     return db.query(models.ExternalSupplier).order_by(models.ExternalSupplier.id.desc()).all()
 
 
-@router.get("/{supplier_id}", response_model=ExternalSupplierOut)
+@router.get("/{supplier_id}", response_model=schemas.ExternalSupplierResponse)
 def get_supplier(supplier_id: int, db: Session = Depends(get_db)):
     supplier = db.query(models.ExternalSupplier).filter_by(id=supplier_id).first()
     if not supplier:
@@ -42,8 +38,8 @@ def get_supplier(supplier_id: int, db: Session = Depends(get_db)):
     return supplier
 
 
-@router.put("/{supplier_id}", response_model=ExternalSupplierOut)
-def update_supplier(supplier_id: int, data: ExternalSupplierUpdate, db: Session = Depends(get_db)):
+@router.put("/{supplier_id}", response_model=schemas.ExternalSupplierResponse)
+def update_supplier(supplier_id: int, data: schemas.ExternalSupplierUpdate, db: Session = Depends(get_db)):
     supplier = db.query(models.ExternalSupplier).filter_by(id=supplier_id).first()
     if not supplier:
         raise HTTPException(status_code=404, detail="Supplier not found")
@@ -53,15 +49,4 @@ def update_supplier(supplier_id: int, data: ExternalSupplierUpdate, db: Session 
 
     db.commit()
     db.refresh(supplier)
-    return supplier
-
-
-@router.delete("/{supplier_id}")
-def delete_supplier(supplier_id: int, db: Session = Depends(get_db)):
-    supplier = db.query(models.ExternalSupplier).filter_by(id=supplier_id).first()
-    if not supplier:
-        raise HTTPException(status_code=404, detail="Supplier not found")
-
-    db.delete(supplier)
-    db.commit()
-    return {"message": "Supplier deleted successfully"}
+    return suppl
